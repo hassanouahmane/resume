@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
-from fastapi.security import OAuth2PasswordRequestForm
 from typing import Optional
 from ...schemas.auth import UserCreate, UserOut, Token, ChangePassword
-from ...core.database import get_db, engine
+from ...core.database import get_db
 from ...models.user import User
 from ...services.auth_service import (
     create_user,
@@ -12,27 +11,59 @@ from ...services.auth_service import (
     get_user_by_email,
 )
 from ...core.security import decode_token, get_password_hash, verify_password
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+# New schema for JSON login
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
-@router.post("/signup", response_model=UserOut)
+
+@router.post("/signup")
 def signup(payload: UserCreate, db: Session = Depends(get_db)):
     if get_user_by_email(db, payload.email):
         raise HTTPException(status_code=400, detail="Email already registered")
     if db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(status_code=400, detail="Username already taken")
+    
+    # Create user
     user = create_user(db, payload.email, payload.username, payload.password, payload.full_name)
-    return user
+    
+    # Generate tokens for the new user
+    tokens = create_tokens_for_user(user)
+    
+    # Return tokens and user info
+    return {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token"),
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "full_name": user.full_name
+        }
+    }
 
 
-@router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
+
+@router.post("/login")
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = authenticate_user(db, payload.username, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     tokens = create_tokens_for_user(user)
-    return tokens
+    return {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token"),
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "full_name": user.full_name
+        }
+    }
 
 
 @router.get("/me", response_model=UserOut)
@@ -55,7 +86,6 @@ def me(authorization: Optional[str] = Header(None), db: Session = Depends(get_db
 
 @router.post("/refresh")
 def refresh():
-    # Placeholder for refresh token flow
     return {"detail": "Refresh token flow not implemented (stateless demo)"}
 
 
